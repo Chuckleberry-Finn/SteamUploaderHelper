@@ -18,6 +18,9 @@ from pathlib import Path
 
 PZ_APP_ID = 108600   # Project Zomboid Steam App ID
 
+NEW_ITEM_ID_RE = re.compile(
+    r"item created successfully at workshop (\d+)", re.IGNORECASE)
+
 VISIBILITY_MAP = {
     "public":   0, "0": 0,
     "friends":  1, "1": 1,
@@ -204,6 +207,29 @@ def find_preview(mod_dir: Path) -> Path | None:
     return None
 
 
+def write_workshop_id(workshop_txt: Path, new_id: str) -> None:
+    # Sets id= in an existing workshop.txt (preserving other lines), or
+    # creates a minimal one if it doesn't exist yet.
+    if not workshop_txt.exists():
+        workshop_txt.write_text("id=" + new_id + "\n", encoding="utf-8")
+        return
+
+    lines = workshop_txt.read_text(encoding="utf-8", errors="replace").splitlines()
+    for i, line in enumerate(lines):
+        if line.strip().lower().startswith("id="):
+            lines[i] = "id=" + new_id
+            break
+    else:
+        insert_at = 0
+        for i, line in enumerate(lines):
+            if line.strip().lower().startswith("version="):
+                insert_at = i + 1
+                break
+        lines.insert(insert_at, "id=" + new_id)
+
+    workshop_txt.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def is_mod_dir(path: Path) -> bool:
     return (path / "Contents").is_dir() or (path / "workshop.txt").exists()
 
@@ -310,6 +336,9 @@ def _build_cmd(exe: Path, mod_dir: Path, workshop_kv: dict,
     if tmp_desc and tmp_desc.exists():
         cmd += ["-d", str(tmp_desc)]
 
+    title = workshop_kv.get("title", "").strip() or mod_dir.name
+    cmd += ["-t", title]
+
     tags = parse_tags(workshop_kv.get("tags") or mod_info_kv.get("tags") or "")
     if tags:
         cmd += ["-T", ",".join(tags)]
@@ -380,6 +409,19 @@ def run_direct_upload(mod_dirs: list, uploader_exe: Path | None,
                     print("    OK")
                     for line in out.splitlines():
                         print("      " + line)
+                    if workshopid is None:
+                        match = NEW_ITEM_ID_RE.search(out)
+                        if match:
+                            new_id = match.group(1)
+                            write_workshop_id(mod_dir / "workshop.txt", new_id)
+                            print("    New Workshop ID " + new_id +
+                                  " saved to workshop.txt")
+                        else:
+                            print("    WARNING: could not detect the new "
+                                  "Workshop ID in the output; workshop.txt "
+                                  "was not updated, so the next upload will "
+                                  "create a duplicate item until id= is set "
+                                  "manually.")
                     ok += 1
                 else:
                     print("    FAILED (exit " + str(result.returncode) + ")")

@@ -457,7 +457,9 @@ class App(tk.Tk):
             "rename_ignorecase":  self.rename_ignorecase.get(),
             "filter":      self._filter_var.get(),
             "field":       self._field_var.get(),
-            "upload_mode": self._upload_mode.get(),
+            "include_contents":  self._include_contents.get(),
+            "include_desc_tags": self._include_desc_tags.get(),
+            "include_preview":   self._include_preview.get(),
             "dry_run":     self._dry_run_var.get(),
             "selected_mods": {str(r.info.path) for r in self._rows if r.var.get()},
         }
@@ -480,7 +482,9 @@ class App(tk.Tk):
         self.rename_ignorecase.set(state["rename_ignorecase"])
         self._filter_var.set(state["filter"])
         self._field_var.set(state["field"])
-        self._upload_mode.set(state["upload_mode"])
+        self._include_contents.set(state["include_contents"])
+        self._include_desc_tags.set(state["include_desc_tags"])
+        self._include_preview.set(state["include_preview"])
         self._dry_run_var.set(state["dry_run"])
 
         for folder in self.rstate.folders:
@@ -890,14 +894,19 @@ class App(tk.Tk):
         # Divider
         tk.Frame(bar, bg=BORDER, width=1).pack(side="left", fill="y", padx=(P, P))
 
-        # Upload mode
-        self._upload_mode = tk.StringVar(value="full")
-        tk.Label(bar, text="Mode:", bg=BG, fg=FG_DIM,
+        # Upload components — all three checked = a full upload
+        self._include_contents  = tk.BooleanVar(value=True)
+        self._include_desc_tags = tk.BooleanVar(value=True)
+        self._include_preview   = tk.BooleanVar(value=True)
+        tk.Label(bar, text="Include:", bg=BG, fg=FG_DIM,
                  font=("Segoe UI", 9)).pack(side="left", padx=(0, 6))
-        ttk.Radiobutton(bar, text="Full",
-                        variable=self._upload_mode, value="full").pack(side="left")
-        ttk.Radiobutton(bar, text="Desc + Tags",
-                        variable=self._upload_mode, value="desc_tags").pack(
+        ttk.Checkbutton(bar, text="Contents",
+                        variable=self._include_contents).pack(side="left")
+        ttk.Checkbutton(bar, text="Desc + Tags",
+                        variable=self._include_desc_tags).pack(
+            side="left", padx=(6, 0))
+        ttk.Checkbutton(bar, text="Preview",
+                        variable=self._include_preview).pack(
             side="left", padx=(6, 0))
 
         # Divider
@@ -1221,9 +1230,20 @@ class App(tk.Tk):
                 "No SteamUploader.exe path set.\nOpen Settings to configure it.")
             return
 
+        components = {
+            comp for comp, var in (
+                ("contents",  self._include_contents),
+                ("desc_tags", self._include_desc_tags),
+                ("preview",   self._include_preview),
+            ) if var.get()
+        }
+        if not components:
+            messagebox.showwarning("Nothing to include",
+                "Check at least one of Contents / Desc + Tags / Preview.")
+            return
+
         mod_dirs = [r.path for r in selected]
         dry_run  = self._dry_run_var.get()
-        mode     = self._upload_mode.get()
 
         self._busy = True
         self._upload_status_var.set("Running...")
@@ -1232,7 +1252,7 @@ class App(tk.Tk):
             old = sys.stdout
             sys.stdout = _TextRedirector(self._upload_log)
             try:
-                up.run_direct_upload(mod_dirs, uploader_exe, dry_run, mode)
+                up.run_direct_upload(mod_dirs, uploader_exe, dry_run, components)
                 uploaded = {str(r.path) for r in selected}
                 self._affected_dirs -= uploaded
                 self.after(0, self._refresh_affected)

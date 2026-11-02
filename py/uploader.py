@@ -320,8 +320,27 @@ def _write_desc_temp(desc_text: str, workshopid, mod_ids: list) -> Path | None:
         return None
 
 
+#: The three independently-toggleable pieces of an upload.
+UPLOAD_COMPONENTS = ("contents", "desc_tags", "preview")
+
+_COMPONENT_LABELS = {
+    "contents":  "Contents",
+    "desc_tags": "Description + Tags",
+    "preview":   "Preview",
+}
+
+
+def describe_components(components) -> str:
+    # Human-readable summary of which pieces are included in an upload.
+    comp_set = set(components)
+    if comp_set >= set(UPLOAD_COMPONENTS):
+        return "Full (Contents + Description/Tags + Preview)"
+    labels = [_COMPONENT_LABELS[c] for c in UPLOAD_COMPONENTS if c in comp_set]
+    return " + ".join(labels) if labels else "(nothing selected)"
+
+
 def _build_cmd(exe: Path, mod_dir: Path, workshop_kv: dict,
-               mod_info_kv: dict, upload_mode: str,
+               mod_info_kv: dict, components,
                tmp_desc: Path | None) -> list:
     raw_wid    = workshop_kv.get("id") or workshop_kv.get("publishedfileid")
     workshopid = int(raw_wid) if raw_wid and str(raw_wid).isdigit() else None
@@ -333,22 +352,26 @@ def _build_cmd(exe: Path, mod_dir: Path, workshop_kv: dict,
     else:
         cmd.append("--new")
 
-    if tmp_desc and tmp_desc.exists():
-        cmd += ["-d", str(tmp_desc)]
-
     title = workshop_kv.get("title", "").strip() or mod_dir.name
     cmd += ["-t", title]
 
-    tags = parse_tags(workshop_kv.get("tags") or mod_info_kv.get("tags") or "")
-    if tags:
-        cmd += ["-T", ",".join(tags)]
+    if "desc_tags" in components:
+        if tmp_desc and tmp_desc.exists():
+            cmd += ["-d", str(tmp_desc)]
 
-    if upload_mode == "full":
+        tags = parse_tags(workshop_kv.get("tags") or mod_info_kv.get("tags") or "")
+        if tags:
+            cmd += ["-T", ",".join(tags)]
+
+    if "contents" in components:
         contents = mod_dir / "Contents"
         if contents.is_dir():
             cmd += ["-c", str(contents)]
+
+    if "preview" in components:
         preview = find_preview(mod_dir)
         if preview:
+            print("    Preview: " + str(preview))
             cmd += ["-p", str(preview)]
 
     return cmd
@@ -359,13 +382,19 @@ def _build_cmd(exe: Path, mod_dir: Path, workshop_kv: dict,
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def run_direct_upload(mod_dirs: list, uploader_exe: Path | None,
-                      dry_run: bool, upload_mode: str = "full") -> None:
+                      dry_run: bool,
+                      components=frozenset(UPLOAD_COMPONENTS)) -> None:
     if uploader_exe is None:
         print("  No SteamUploader.exe configured.\n")
         return
 
     if not uploader_exe.exists() and not dry_run:
         print("  ERROR: Uploader not found at " + str(uploader_exe) + "\n")
+        return
+
+    if not components:
+        print("  Nothing selected to upload (Contents / Desc+Tags / Preview "
+              "are all unchecked).\n")
         return
 
     print("  Uploading " + str(len(mod_dirs)) + " mod(s)\n")
@@ -381,28 +410,30 @@ def run_direct_upload(mod_dirs: list, uploader_exe: Path | None,
 
             raw_wid    = workshop_kv.get("id") or workshop_kv.get("publishedfileid")
             workshopid = int(raw_wid) if raw_wid and str(raw_wid).isdigit() else None
-            desc_text  = workshop_kv.get("description", "").strip()
-            mod_ids    = (_get_mod_ids(str(mod_dir / "Contents"))
-                          if (mod_dir / "Contents").is_dir() else [])
 
-            tmp_desc = _write_desc_temp(desc_text, workshopid, mod_ids)
-            if tmp_desc:
-                parts = (["Workshop ID: " + str(workshopid)] if workshopid else []) + \
-                        ["Mod ID: " + m for m in mod_ids]
-                if parts:
-                    print("    Footer: " + " | ".join(parts))
+            if "desc_tags" in components:
+                desc_text = workshop_kv.get("description", "").strip()
+                mod_ids   = (_get_mod_ids(str(mod_dir / "Contents"))
+                             if (mod_dir / "Contents").is_dir() else [])
+
+                tmp_desc = _write_desc_temp(desc_text, workshopid, mod_ids)
+                if tmp_desc:
+                    parts = (["Workshop ID: " + str(workshopid)] if workshopid else []) + \
+                            ["Mod ID: " + m for m in mod_ids]
+                    if parts:
+                        print("    Footer: " + " | ".join(parts))
 
             cmd = _build_cmd(uploader_exe, mod_dir, workshop_kv,
-                             mod_info_kv, upload_mode, tmp_desc)
+                             mod_info_kv, components, tmp_desc)
 
+            label = describe_components(components)
             if dry_run:
-                label = " (desc+tags only)" if upload_mode == "desc_tags" else ""
-                print("    DRY RUN" + label + " - would run:")
-                print("      " + " ".join(cmd))
+                print("    DRY RUN (" + label + ") - would run:")
+                print("      " + subprocess.list2cmdline(cmd))
                 ok += 1
             else:
-                if upload_mode == "desc_tags":
-                    print("    Mode: description + tags only")
+                print("    Mode: " + label)
+                print("    Command: " + subprocess.list2cmdline(cmd))
                 result = subprocess.run(cmd, capture_output=True, text=True)
                 out    = (result.stdout + result.stderr).strip()
                 if result.returncode == 0:
